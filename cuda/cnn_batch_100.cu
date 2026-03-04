@@ -1,3 +1,4 @@
+%%writefile cnn_full.cu
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -128,8 +129,8 @@ __global__ void maxpool_kernel(int32 *input, int32 *output, int channels, int in
 }
 
 __global__ void fc_kernel(int32 *input_batch, int16 *weights, int16 *bias, int32 *output_batch) {
-    int batch_idx = blockIdx.x;
-    int neuron = threadIdx.x;
+    int batch_idx = blockIdx.x; // Each block processes one image in the batch
+    int neuron = threadIdx.x; // Each thread processes one output neuron for that image
 
     if(batch_idx >= BATCH_SIZE || neuron >= FC_OUT) return;
 
@@ -177,7 +178,7 @@ int main() {
     int32 *d_c1o, *d_mp1, *d_c2o, *d_mp2, *d_fco;
 
     // Allocate d_in for BATCH_SIZE images
-    cudaMalloc(&d_in, input_img.size() * sizeof(int16));
+    cudaMalloc(&d_in, input_img.size() * sizeof(int16)); // input_img.size() already accounts for BATCH_SIZE
 
     cudaMalloc(&d_c1k, c1k.size()*sizeof(int16)); cudaMalloc(&d_c1b, c1b.size()*sizeof(int16));
     cudaMalloc(&d_c2k, c2k.size()*sizeof(int16)); cudaMalloc(&d_c2b, c2b.size()*sizeof(int16));
@@ -207,19 +208,57 @@ int main() {
     cudaEventRecord(start, 0);
 
     // 4. CNN Forward Flow [cite: 65-70, 76]
-    dim3 block(16, 16);
+    const int THREADS_PER_BLOCK_2D = 16;
+    const int THREADS_PER_BLOCK_1D = 256;
 
     // Layer 1
-    conv1_kernel<<<dim3(C1_W/block.x, C1_H/block.y, C1_OUT * BATCH_SIZE), block>>>(d_in, d_c1k, d_c1b, d_c1o);
-    relu_kernel<<<(C1_OUT*C1_W*C1_H+255)/256, 256, 0, BATCH_SIZE>>>(d_c1o, C1_OUT*C1_W*C1_H);
-    maxpool_kernel<<<dim3(MP1_W/block.x, MP1_H/block.y, C1_OUT * BATCH_SIZE), block>>>(d_c1o, d_mp1, C1_OUT, C1_W, C1_H, MP1_W, MP1_H);
+    dim3 block_2d(THREADS_PER_BLOCK_2D, THREADS_PER_BLOCK_2D);
+
+    dim3 conv1_grid_dim(
+        (C1_W + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        (C1_H + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        C1_OUT * BATCH_SIZE
+    );
+    conv1_kernel<<<conv1_grid_dim, block_2d>>>(d_in, d_c1k, d_c1b, d_c1o);
+
+    dim3 relu1_grid_dim(
+        (C1_OUT*C1_W*C1_H + THREADS_PER_BLOCK_1D - 1) / THREADS_PER_BLOCK_1D,
+        1,
+        BATCH_SIZE
+    );
+    relu_kernel<<<relu1_grid_dim, THREADS_PER_BLOCK_1D>>>(d_c1o, C1_OUT*C1_W*C1_H);
+
+    dim3 mp1_grid_dim(
+        (MP1_W + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        (MP1_H + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        C1_OUT * BATCH_SIZE
+    );
+    maxpool_kernel<<<mp1_grid_dim, block_2d>>>(d_c1o, d_mp1, C1_OUT, C1_W, C1_H, MP1_W, MP1_H);
 
     // Layer 2
-    conv2_kernel<<<dim3(C2_W/block.x, C2_H/block.y, C2_OUT * BATCH_SIZE), block>>>(d_mp1, d_c2k, d_c2b, d_c2o);
-    relu_kernel<<<(C2_OUT*C2_W*C2_H+255)/256, 256, 0, BATCH_SIZE>>>(d_c2o, C2_OUT*C2_W*C2_H);
-    maxpool_kernel<<<dim3(MP2_W/block.x, MP2_H/block.y, C2_OUT * BATCH_SIZE), block>>>(d_c2o, d_mp2, C2_OUT, C2_W, C2_H, MP2_W, MP2_H);
+    dim3 conv2_grid_dim(
+        (C2_W + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        (C2_H + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        C2_OUT * BATCH_SIZE
+    );
+    conv2_kernel<<<conv2_grid_dim, block_2d>>>(d_mp1, d_c2k, d_c2b, d_c2o);
+
+    dim3 relu2_grid_dim(
+        (C2_OUT*C2_W*C2_H + THREADS_PER_BLOCK_1D - 1) / THREADS_PER_BLOCK_1D,
+        1,
+        BATCH_SIZE
+    );
+    relu_kernel<<<relu2_grid_dim, THREADS_PER_BLOCK_1D>>>(d_c2o, C2_OUT*C2_W*C2_H);
+
+    dim3 mp2_grid_dim(
+        (MP2_W + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        (MP2_H + THREADS_PER_BLOCK_2D - 1) / THREADS_PER_BLOCK_2D,
+        C2_OUT * BATCH_SIZE
+    );
+    maxpool_kernel<<<mp2_grid_dim, block_2d>>>(d_c2o, d_mp2, C2_OUT, C2_W, C2_H, MP2_W, MP2_H);
 
     // FC Layer
+    // Each block processes one image, each thread processes one output neuron
     fc_kernel<<<BATCH_SIZE, FC_OUT>>>(d_mp2, d_fcw, d_fcb, d_fco);
 
     // Record stop event
@@ -233,18 +272,21 @@ int main() {
     std::vector<int32> final_out_batch(BATCH_SIZE * FC_OUT);
     cudaMemcpy(final_out_batch.data(), d_fco, BATCH_SIZE * FC_OUT * sizeof(int32), cudaMemcpyDeviceToHost);
 
-    // For verification, let's just predict the first image in the batch
-    int prediction = 0;
-    int max_val = final_out_batch[0];
-    for(int i=1; i<FC_OUT; i++) {
-        if(final_out_batch[i] > max_val) {
-            max_val = final_out_batch[i];
-            prediction = i;
+    // Iterate through each image in the batch and print its prediction
+    for (int batch_idx = 0; batch_idx < BATCH_SIZE; ++batch_idx) {
+        int prediction = 0;
+        int max_val = final_out_batch[batch_idx * FC_OUT];
+        for(int i=1; i<FC_OUT; i++) {
+            if(final_out_batch[batch_idx * FC_OUT + i] > max_val) {
+                max_val = final_out_batch[batch_idx * FC_OUT + i];
+                prediction = i;
+            }
         }
+        std::cout << "Predicted Digit for Image " << batch_idx << ": " << prediction << std::endl;
     }
 
-    std::cout << "Predicted Digit for the first image in batch: " << prediction << std::endl;
-    std::cout << "GPU execution time for batch prediction: " << milliseconds << " ms" << std::endl;
+    std::cout << "Total GPU execution time for batch prediction: " << milliseconds << " ms" << std::endl;
+    std::cout << "Average GPU execution time per image: " << milliseconds / BATCH_SIZE << " ms" << std::endl;
 
     // Cleanup
     cudaFree(d_in); cudaFree(d_c1k); cudaFree(d_c1b);
