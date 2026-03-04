@@ -1,4 +1,3 @@
-%%writefile cnn_full.cu
 #include <iostream>
 #include <vector>
 #include <fstream>
