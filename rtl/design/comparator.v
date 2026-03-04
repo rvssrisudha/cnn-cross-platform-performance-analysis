@@ -1,3 +1,18 @@
+/*------------------------------------------------------------------------
+ *
+ *  Copyright (c) 2021 by Bo Young Kang, All rights reserved.
+ *
+ *  File name  : comparator.v
+ *  Written by : Kang, Bo Young, weenslab
+ *  Written on : Oct 13, 2021
+ *  Version    : 22
+ *  Design     : Final Comparator for decision
+ *
+ *------------------------------------------------------------------------*/
+
+/*-------------------------------------------------------------------
+ *  Module: comparator
+ *------------------------------------------------------------------*/
 
 module comparator
     (
@@ -116,4 +131,3 @@ module comparator
     end
 
 endmodule
-
