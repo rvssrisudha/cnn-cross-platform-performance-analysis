@@ -1,4 +1,4 @@
-CNN Inference Acceleration Across CPU, GPU, and RTL Hardware
+#CNN Inference Acceleration Across CPU, GPU, and RTL Hardware
 Cross-Architecture Performance Study
 
 This project evaluates how a Convolutional Neural Network (CNN) performs across different computing architectures:
