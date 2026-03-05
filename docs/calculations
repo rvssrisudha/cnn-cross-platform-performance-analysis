@@ -1,0 +1,8 @@
+Slack = Required Time − Arrival Time
+Arrival Time = Required Time − Slack
+WNS (Worst Negative Slack) = 2.114 ns
+Clock constraint - 10 ns (100 MHz)
+Arrival Time = 10 ns − 2.114 ns
+Arrival Time ≈ 7.886 ns
+Critical Path Delay: 7.886 ns
+
